@@ -1,0 +1,306 @@
+---
+title: "How to choose the best tasting coffee?"
+author: "Serban Aliz-Andra"
+output: 
+  html_document: 
+    toc: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+# load all required packages
+library(maps)
+library(tidyverse)
+library(tidytuesdayR)
+library(plotly)
+library(stargazer)
+library(corrplot)
+library(countrycode)
+```
+
+# Introduction and motivation
+
+In the coffee industry, quality assessments often rely on comprehensive scoring systems, such as coffee cupping. [[1]](Baqueta, M. R., Coqueiro, A., & Valderrama, P., 2019). Coffee cupping is the practice of observing the tastes and aromas of brewed coffee and scoring it on different attributes like *Aroma*, *Flavor*, *Acidity* and *Body*. Each grade is on a 0-10 scale, resulting in a total cupping score between 0 and 100. While this aggregate score provides a holistic evaluation, it may not fully capture what matters most to the average coffee consumer.
+
+Among the various sensory attributes, *flavor* consistently stands out as a primary driver of consumer satisfaction. It is the attribute most directly associated with the overall enjoyment of coffee, as it is a combined impression of all the gustatory (taste bud) sensations and retro-nasal aromas that go from the mouth to nose. [[2]](Coffee Quality Institute, 2024)
+
+Thus, this analysis focuses on predicting the *flavor* of the coffee based on characteristics such as country of origin, growing altitude, species, and others. Unlike the total cupping score, which blends multiple factors, focusing on flavor allows us to address the key attributes that resonate most with coffee drinkers and identify how they can choose the best tasting coffee.
+
+# The data set
+
+```{r}
+# load the data
+tt_output <- tt_load("2020-07-07")
+coffee_ratings <- tt_output$coffee_ratings
+
+coffee <- coffee_ratings %>%
+  # select relevant variables
+  select(total_cup_points, species, country_of_origin, grading_date,
+         variety:moisture, color, expiration, altitude_mean_meters) %>%
+  # create a variable for days until expiration
+  mutate(days_to_expiration = mdy(expiration) - mdy(grading_date)) %>%
+  # tidy the altitude variable
+  mutate(altitude_mean_meters = ifelse(altitude_mean_meters > 8000, NA, altitude_mean_meters)) %>%
+  # remove observation with all 0 ratings
+  filter(total_cup_points != 0)
+
+# frequency table for days_to_expiration variable
+# table(coffee$days_to_expiration)
+```
+
+The data used in this project comes from the Tidy Tuesday project. [[3]](https://github.com/rfordatascience/tidytuesday/tree/main/data/2020/2020-07-07) The data set was collected from the Coffee Quality Institute's review pages in January 2018 and contains data for both Arabica and Robusta beans, across many countries and professionally rated on a 0-100 scale. It consists of 1,339 observations of 43 variables.
+
+For this analysis, I select a subset of 20 variables. I do not consider variables such as name and owner of the farm, company, associated International Coffee Organization, certification body details, etc., as these and other omitted variables are quite messy and do not provide information that are focusing on in this project. In addition, I remove an observation with all zero ratings from the data set and set all unrealistic altitude values (above 8,000 meters) as missing.
+
+The variables included in the analysis are:
+
+-   `total_cup_points`: Total rating/points (0 - 100 scale)
+-   `species`: Species of coffee bean (arabica or robusta)
+-   `country_of_origin`: Where the bean came from
+-   `grading_date`: When the beans were graded
+-   `variety`: Variety of the beans
+-   `vprocessing_method`: Method for processing
+-   `aroma`: Aroma grade
+-   `flavor`: Flavor grade
+-   `aftertaste`: Aftertaste grade
+-   `acidity`: Acidity grade
+-   `body`: Body grade
+-   `balance`: Balance grade
+-   `uniformity`: Uniformity grade
+-   `clean_cup`: Clean cup grade
+-   `sweetness`: Sweetness grade
+-   `cupper_points`: Cupper Points
+-   `moisture`: Moisture Grade
+-   `color`: Color of bean
+-   `expiration`: Expiration date of the beans
+-   `altitude_mean_meters`: Altitude mean meters
+
+Additionally, I create a variable `days_to_expiration`, indicating days until expiration on the day when the beans were graded. However, it appears that all coffee beans were graded exactly one year until their expiration date. This limits this analysis as we cannot inspect whether "freshness" of the coffee beans is one of the factors affecting coffee taste.
+
+# Exploratory Data Analysis
+
+## Is the sample representative?
+
+The interactive map below shows the total number of coffee ratings and the average flavor rating for each country available in the data set.
+
+```{r, fig.width=9, fig.height=4.5}
+# tidy the country of origin variable for plotting
+coffee <- coffee %>%
+  mutate(
+    country_of_origin = case_when(
+      country_of_origin %in% c("United States", "United States (Hawaii)") ~ "USA",
+      country_of_origin == "United States (Puerto Rico)" ~ "Puerto Rico",
+      country_of_origin == "Tanzania, United Republic Of" ~ "Tanzania",
+      country_of_origin == "Cote d?Ivoire" ~ "Ivory Coast",
+      .default = country_of_origin
+    )
+  )
+
+# load map data for plotting
+world_map <- map_data("world")
+
+# coffee origin data
+coffee_origin <- coffee %>%
+  # calculate number of coffee ratings and average flavor rating per country
+  group_by(country_of_origin) %>%
+  summarise(n = n(),
+            avg_rating = mean(flavor)) %>%
+  # omit missing country data
+  na.omit() %>%
+  # rename columns to match map data
+  rename(region = country_of_origin)
+
+# merge map and coffee origin data
+coffee_origin_map <- full_join(coffee_origin, world_map, by = "region")
+
+# create ggplot object for the map of coffee origin
+ggplot_map <- ggplot(coffee_origin_map, aes(long, lat, group = group)) +
+  geom_polygon(aes(fill = n,
+                   text = paste("Country:", region,
+                                "<br>Ratings:", ifelse(is.na(n), 0, n),
+                                "<br>Avg. flavor rating:", ifelse(is.na(avg_rating), "-", round(avg_rating, 1)))),
+               color = "white") +
+  scale_fill_gradient(low = "wheat", high = "coral4", na.value = "lightgray") +
+  theme_void() +
+  labs(fill = "Number of ratings")
+
+# convert ggplot to plotly for interactivity
+interactive_map <- ggplotly(ggplot_map, tooltip = "text")
+
+# display the interactive map
+interactive_map
+```
+
+We see that in our sample, Mexico, Colombia, and Brazil have the most coffee ratings. However, according to the USDA statistics [[4]](Foreign Agricultural Service, 2024), the top coffee producing countries, as of 2023/2024, are Brazil, Vietnam, and Colombia. Mexico, along with Peru, account for only 2% of the global coffee production. This suggests that Mexico is over-represented in our sample, while Vietnam is under-represented.
+
+Similarly, looking at the distribution of Arabica vs. Robusta coffee species, we see that only 2.1% of all ratings correspond to Robusta coffee beans. However, at least 25% of all coffee produced worldwide is Robusta according to the World Coffee Research [[5]](World Coffee Research, 2024). Again, we see that it is under-represented in our sample.
+
+```{r}
+coffee %>%
+  # calculate number and percent of observations for each species
+  group_by(species) %>%
+  summarise(n = n()) %>%
+  mutate(perc = n / sum(n) * 100) %>%
+  # add a column with bar label
+  mutate(lab = paste0(n, " (", round(perc, 1), "%)")) %>%
+  # create a barplot
+  ggplot(aes(x = species, y = n)) +
+  geom_col(fill = "coral4") +
+  geom_text(aes(label = lab), vjust = 0, size = 5) +
+  theme_bw() +
+  labs(x = "Species of coffee bean",
+       y = "Number of ratings",
+       title = "Number of ratings by coffee species")
+```
+
+## Descriptive Statistics
+
+<style>
+
+table, td, th {
+  border: none;
+  padding-left: 1em;
+  padding-right: 1em;
+  min-width: 50%;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+</style>
+
+```{r, results='asis'}
+coffee %>%
+  as.data.frame() %>%
+  stargazer(type = "html", summary = TRUE, median = TRUE, digits = 1,
+            title = "Summary statistics of continuous variables",
+            covariate.labels = c("Total rating/points", "Aroma grade", "Flavor grade",
+                                 "Aftertaste grade", "Acidity grade", "Body grade",
+                                 "Balance grade", "Uniformity grade", "Clean cup grade",
+                                 "Sweetness grade", "Cupper Points", "Moisture Grade",
+                                 "Altitude mean meters"))
+```
+
+The summary statistics of the continuous variables in the dataset show consistently high-quality ratings, with mean sensory scores clustered around 7.5 on a 10-point scale and minimal variability. Sweetness, clean cup, and uniformity grades are near-perfect, although there are a few potential outliers for clean cup and sweetness with low ratings. The data spans diverse altitudes, with a mean of 1,328 meters, suggesting that coffee from varied growing conditions is represented in the data set.
+
+Hypothesis 1: Flavour is the attribute that affects the coffee rating the most.
+
+## Variable Correlation
+
+```{r}
+coffee %>%
+  select(total_cup_points, aroma:moisture, altitude_mean_meters) %>%
+  cor(use = "pairwise.complete.obs") %>%
+  corrplot(method = "number", type = "upper", tl.col = "black", tl.srt = 45,
+           tl.cex = 0.7, number.cex = 0.7)
+```
+
+By looking at the correlation between the continuous variables, we see that flavor is the most strongly correlated with the total coffee rating out of the 10 rated attributes. This suggests that flavor may indeed be the most important driver of consumer satisfaction.
+
+# Regression Analysis
+
+## How do altitude and species affect coffee flavor?
+
+Hypothesis 2: Altitude and coffee bean species are among the most important factors impacting flavor.
+
+It is generally considered that altitude and coffee bean species are among the most important factors impacting flavor. [[6]](Mintesnot, A., & Dechassa, N. (2018)) Thus, we begin by checking this claim.
+
+```{r}
+ggplot(coffee, aes(x = altitude_mean_meters, y = flavor, col = species)) +
+  geom_point() +
+  scale_color_manual(values = c("wheat3", "coral4")) +
+  labs(x = "Average altitude",
+       y = "Flavor grade",
+       col = "Species of coffee bean",
+       title = "Coffee flavor by growing altitude and bean species") +
+  theme_bw()
+```
+
+The scatter plot of flavor vs altitude shows a positive relationship between the two variables, suggesting that high altitude coffee may taste better than low altitude coffee.
+
+```{r, results='asis'}
+mod1 <- lm(flavor ~ altitude_mean_meters*species, data = coffee)
+stargazer(mod1, type = "html",
+          covariate.labels = c("Altitude (meters)", "Species: Robusta vs Arabica",
+                               "Altitude*Robusta"),
+          dep.var.labels = "Flavor rating")
+```
+
+The linear regression model confirms that altitude has a statistically significant positive effect on coffee flavor ($p < .001$). This effect does not differ by coffee bean species, as indicated by a non-significant interaction term ($p = .390$). The model also suggests that comparing coffee grown at the same altitude, Robusta tends to have better flavor as compared to Arabica coffee ($p = .039$).
+
+Altitude and coffee bean species, however, explain only about 2.9% of the variability in flavor ratings ($R^2 = 0.029$).
+
+## Other factors impacting flavor
+
+Next I estimate a model with the region of where the coffee was grown, processing method, acidity, balance, and body, as well as altitude and species, as predictors of flavor. These predictors were selected as they are often provided on the packaging of specialty coffees and can be taken into account by consumers choosing which coffee to buy.
+
+```{r, results='asis'}
+# create the variable for region as defined in the World Bank Development Indicators
+coffee$region <- countrycode(sourcevar = coffee$country_of_origin,
+                             origin = "country.name",
+                             destination = "region")
+# set reference levels for categorical variables
+coffee$region <- factor(coffee$region)
+coffee$region <- relevel(coffee$region, ref = "Latin America & Caribbean")
+coffee$processing_method <- factor(coffee$processing_method)
+coffee$processing_method <- relevel(coffee$processing_method, ref = "Washed / Wet")
+# fit linear regression
+mod2 <- lm(flavor ~ altitude_mean_meters + species + region +
+             processing_method + acidity + balance + body, data = coffee)
+stargazer(mod2, type = "html",
+          covariate.labels = c("Altitude (meters)", "Species: Robusta vs Arabica",
+                               "Region: East Asia (ref. Latin America and Caribbean)",
+                               "Region: North America", "Region: South Asia",
+                               "Region: Sub-Saharan Africa",
+                               "Processing: Natural / Dry (ref. Washed / Wet)",
+                               "Processing: Other", "Processing: Pulped natural / honey",
+                               "Processing: Semi-washed / Semi-pulped",
+                               "Acidity", "Balance", "Body"),
+          dep.var.labels = "Flavor rating")
+```
+
+The model indicates that after controlling for other variables, altitude and species are no longer significant predictors of flavor. Instead, the model suggests that the most important predictors are acidity, balance, and body ratings of the coffee. In particular, higher acidity, balance, and body ratings are significantly associated with better flavor rating ($p < .001$).
+
+Holding other variables fixed, Semi-washed / Semi-pulped coffee processing leads to significantly better flavor rating (higher by 0.051 points, on average) as compared to Washed / Wet processing ($p = .050$). Similarly, Natural / Dry processing also leads to significantly better flavor rating (higher by 0.059 points, on average) as compared to Washed / Wet processing ($p < .001$).
+
+Finally, the model suggests that all else equal, coffee grown in North America tends to have slightly better flavor (rating higher by 0.158 points, on average) as compared to coffee from Latin America & Caribbean ($p = .015$).
+
+This model explains almost 70% of the variability in coffee flavor ratings ($R^2 = 0.698$). The adjusted $R^2$ of this model is also significantly higher (0.694) than the model with only altitude and species as predictors (0.026), indicating a better fit to the data.
+
+## Regression diagnostics
+
+Regression diagnostic plots for the full model, displayed below, show that the model satisfies assumptions of **linearity** (the Residuals vs Fitted plot shows no nonlinear patterns), **normality** (the Q-Q Residuals plot shows the points closely following the straight line and deviating only at the tails, suggesting approximately normal distribution), and **homoscedasticity** (the Scale-Location plot shows randomly and equally spread points along the horizontal axis). There are also no influential cases as indicated in the Residuals vs Leverage plot, as no points are beyond the dashed lines for Cook's distance. Thus, it can be concluded that the model is appropriate for this data.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(mod2)
+```
+
+The variance inflation factors (VIF) indicate no issues of multicollinearity in the model as none of the values exceed 10:
+
+```{r}
+car::vif(mod2)
+```
+
+# Conclusion
+
+The aim of this analysis was to uncover the factors that most significantly influence coffee flavor, a primary driver of consumer satisfaction. Using linear regression methods, it twas explored how both environmental and sensory attributes contribute to flavor ratings. The results indicate that acidity, balance, and body are the most significant drivers of coffee flavor, far outweighing the effects of altitude and species. While high-altitude coffee and Robusta beans showed slight advantages, sensory attributes and processing methods, such as Natural/Dry and Semi-washed, had a greater impact on flavor. The final model explained 70% of the variability in flavor ratings, emphasizing the importance of focusing on sensory qualities and processing techniques for better tasting coffee. However, the analysis is limited by potential sample bias and the absence of data on certain variables, such as coffee freshness, which might further influence flavor ratings.
+
+# References
+
+[[1]] Baqueta, M. R., Coqueiro, A., & Valderrama, P. (2019). Brazilian coffee blends: A simple and fast method by near‐infrared spectroscopy for the determination of the sensory attributes elicited in professional coffee cupping. Journal of food science, 84(6), 1247-1255.
+
+[[2]] Coffee Quality Institute (2024, December 13). Grade Details. https://database.coffeeinstitute.org/coffee/357789/grade
+
+[[3]] (https://github.com/rfordatascience/tidytuesday/tree/main/data/2020/2020-07-07)
+
+[[4]] Foreign Agricultural Service (2024, December 13). Production - Coffee. https://fas.usda.gov/data/production/commodity/0711100
+
+[[5]] World Coffee Research (2024, December 13). History of Robusta. https://varieties.worldcoffeeresearch.org/robusta-2/history-of-robusta
+
+[[6]] Mintesnot, A., & Dechassa, N. (2018). Effect of altitude, shade, and processing methods on the quality and biochemical composition of green coffee beans in Ethiopia. East African Journal of Sciences, 12(2), 87-100.
